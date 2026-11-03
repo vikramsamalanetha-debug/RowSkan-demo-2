@@ -32,3 +32,9 @@ Still required:
 6. Optional cloud plans, storage quotas, billing and restoration tests. No paid service is configured or purchased.
 
 The public website is an early-access local app until these gates pass. No fake cloud sync or subscription controls are presented as functional.
+
+## Vehicle GPS — 0.3
+
+Optional foreground GPS capture saves latitude/longitude, reported accuracy, timestamp and whether a pin was manually corrected. Saved pins are included in vehicle backup/import and intake drafts. The local north-up walking guide computes straight-line distance and bearing without contacting a map provider. It does not rotate with the phone and is not an aisle-routing engine. Approximate arrival is labeled as an uncertainty area, not exact vehicle identification. Yard/row/space, photos and VIN remain visible.
+
+The guide stops when its screen is closed or the app/browser is backgrounded. No movement history or background location is collected. An optional explicit Google Maps action sends the destination coordinates to Google. Location permissions and positioning accuracy require real-device testing. GPS does not enable the still-pending device sync.
