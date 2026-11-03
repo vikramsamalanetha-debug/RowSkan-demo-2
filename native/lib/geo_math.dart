@@ -6,6 +6,7 @@ Map<String,dynamic>? validateGps(dynamic input){
  final lat=input['lat'],lon=input['lon'],accuracy=input['accuracyMeters'];
  if(lat is! num||lon is! num||!lat.isFinite||!lon.isFinite||lat < -90||lat>90||lon < -180||lon>180)throw FormatException('Invalid GPS coordinates.');
  if(accuracy!=null&&(accuracy is! num||!accuracy.isFinite||accuracy<0||accuracy>1000000))throw FormatException('Invalid GPS accuracy.');
+ if(input['source']=='gps'&&accuracy==null)throw FormatException('GPS accuracy is required.');
  if(!['gps','manual'].contains(input['source']))throw FormatException('Invalid GPS source.');
  final at=input['capturedAt'];if(at is! String||DateTime.tryParse(at)==null)throw FormatException('Invalid GPS timestamp.');
  return {'lat':lat.toDouble(),'lon':lon.toDouble(),'accuracyMeters':accuracy?.toDouble(),'capturedAt':at,'source':input['source']};

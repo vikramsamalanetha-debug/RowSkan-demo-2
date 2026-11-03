@@ -2,6 +2,7 @@ export function validateGps(input){
  if(input==null)return null;
  if(typeof input!=='object'||!Number.isFinite(input.lat)||!Number.isFinite(input.lon)||input.lat< -90||input.lat>90||input.lon< -180||input.lon>180)throw Error('Enter valid latitude and longitude.');
  if(input.accuracyMeters!=null&&(!Number.isFinite(input.accuracyMeters)||input.accuracyMeters<0||input.accuracyMeters>1000000))throw Error('Invalid GPS accuracy.');
+ if(input.source==='gps'&&input.accuracyMeters==null)throw Error('GPS accuracy is required.');
  if(!['gps','manual'].includes(input.source)||typeof input.capturedAt!=='string'||!Number.isFinite(Date.parse(input.capturedAt)))throw Error('Invalid GPS location metadata.');
  return {lat:input.lat,lon:input.lon,accuracyMeters:input.accuracyMeters??null,capturedAt:input.capturedAt,source:input.source};
 }

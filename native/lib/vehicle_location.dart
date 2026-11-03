@@ -41,10 +41,10 @@ class _FindVehicleState extends State<FindVehicle> with WidgetsBindingObserver {
  StreamSubscription<Position>? subscription;Position? fix;String status='Tap Start walking guide to use your location.';bool running=false;
  @override void initState(){super.initState();WidgetsBinding.instance.addObserver(this);}
  @override void dispose(){WidgetsBinding.instance.removeObserver(this);subscription?.cancel();super.dispose();}
- @override void didChangeAppLifecycleState(AppLifecycleState state){if(state!=AppLifecycleState.resumed&&running){stop();}}
+ @override void didChangeAppLifecycleState(AppLifecycleState state){if([AppLifecycleState.paused,AppLifecycleState.hidden,AppLifecycleState.detached].contains(state)&&running){stop();}}
  void stop(){subscription?.cancel();subscription=null;if(mounted)setState((){running=false;status='Guide paused. Tap Start to resume.';});}
  Future<void> start() async {
-  if(running)return;setState((){running=true;status='Getting your current position…';});
+  if(running)return;setState((){running=true;fix=null;initial=null;status='Getting your current position…';});
   try{final first=await captureGps();if(!mounted||!running)return;
    setState(()=>status='Location acquired. Waiting for live updates…');
    // Start a foreground-only stream. No background-location permission is used.

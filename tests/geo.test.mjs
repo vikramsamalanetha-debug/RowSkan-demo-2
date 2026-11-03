@@ -13,7 +13,7 @@ test('manual correction keeps direction and labels accuracy unknown',()=>{
 });
 test('invalid location metadata rejected and older records remain valid',()=>{
  assert.equal(validateGps(undefined),null);assert.deepEqual(validateGps(gps),gps);
- for(const change of [{lat:NaN},{lon:190},{lat:-91},{accuracyMeters:-1},{capturedAt:'bad'},{source:'guess'}])assert.throws(()=>validateGps({...gps,...change}));
+ for(const change of [{lat:NaN},{lon:190},{lat:-91},{accuracyMeters:-1},{accuracyMeters:null},{capturedAt:'bad'},{source:'guess'}])assert.throws(()=>validateGps({...gps,...change}));
 });
 test('GPS capture timestamp and accuracy preserved',()=>{
  assert.deepEqual(gpsFromPosition({timestamp:Date.parse(gps.capturedAt),coords:{latitude:gps.lat,longitude:gps.lon,accuracy:gps.accuracyMeters}}),{...gps,capturedAt:new Date(gps.capturedAt).toISOString()});
