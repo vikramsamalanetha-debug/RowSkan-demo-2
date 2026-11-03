@@ -1,9 +1,9 @@
-name: RowSkan native preview
+name: RowSkan release checks
 on:
   pull_request:
     paths: ['native/**', '.github/workflows/rowskan-native.yml']
   push:
-    branches: ['main']
+    branches: ['main', 'production/local-first-release']
     paths: ['native/**', '.github/workflows/rowskan-native.yml']
   workflow_dispatch:
 permissions:
@@ -19,7 +19,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: android
-          - os: windows-latest
+          - os: windows-2022
             target: windows
           - os: macos-14
             target: macos
@@ -87,3 +87,4 @@ jobs:
           name: RowSkan-Mac-preview
           path: native/RowSkan-Mac.zip
           retention-days: 7
+

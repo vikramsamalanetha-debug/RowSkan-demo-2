@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:file_selector/file_selector.dart';
 import 'store.dart';
+import 'backup_crypto.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -30,39 +32,131 @@ class _InventoryState extends State<Inventory> {
   void message(Object text){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(text.toString())));}
   Future<void> reload() async {try{final r=await widget.store.all(),m=await widget.store.setting('mode','solo');if(mounted)setState((){records=r;mode=m;busy=false;});}catch(e){message(e);if(mounted)setState(()=>busy=false);}}
   Future<void> edit([Map<String,dynamic>? v]) async {await Navigator.push(context,MaterialPageRoute(builder:(_)=>Intake(widget.store,vehicle:v)));await reload();}
-  Future<void> backup() async {try{final bytes=await widget.store.backup();final name='RowSkan-${DateTime.now().toIso8601String().substring(0,10)}.zip';if(!widget.store.desktop){final dir=await getTemporaryDirectory();final file=File('${dir.path}/$name');await file.writeAsBytes(bytes,flush:true);await SharePlus.instance.share(ShareParams(files:[XFile(file.path)],sharePositionOrigin:const Rect.fromLTWH(0,0,100,100)));}else{final path=await getSaveLocation(suggestedName:name);if(path==null)return;await XFile.fromData(Uint8List.fromList(bytes),mimeType:'application/zip',name:name).saveTo(path.path);}message('Backup prepared. Keep the exported file somewhere safe.');}catch(e){message('Backup failed: $e');}}
-  Future<void> import() async {try{final f=await openFile(acceptedTypeGroups:[const XTypeGroup(label:'RowSkan backup',extensions:['zip'])]);if(f==null)return;final count=await widget.store.importBackup(await f.readAsBytes());await reload();message('$count vehicles imported. Existing records preserved.');}catch(e){await reload();message('Import stopped: $e. Records already imported were kept.');}}
+  Future<String?> backupPassword({required bool creating}) async {
+    final password=TextEditingController(),confirm=TextEditingController();
+    final key=GlobalKey<FormState>();
+    final result=await showDialog<String>(context:context,builder:(c)=>AlertDialog(
+      title:Text(creating?'Protect your backup':'Unlock backup'),
+      content:Form(key:key,child:Column(mainAxisSize:MainAxisSize.min,children:[
+        const Text('Keep the password somewhere safe. LIT America cannot recover it.'),
+        const SizedBox(height:16),
+        TextFormField(controller:password,obscureText:true,autocorrect:false,enableSuggestions:false,decoration:const InputDecoration(labelText:'Backup password'),validator:(v)=>creating&&v!.length<12?'At least 12 characters':v!.isEmpty?'Required':null),
+        if(creating)...[const SizedBox(height:12),TextFormField(controller:confirm,obscureText:true,autocorrect:false,enableSuggestions:false,decoration:const InputDecoration(labelText:'Confirm password'),validator:(v)=>v!=password.text?'Passwords do not match':null)],
+      ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Cancel')),FilledButton(onPressed:(){if(key.currentState!.validate())Navigator.pop(c,password.text);},child:Text(creating?'Export':'Unlock'))],
+    ));
+    // Controllers belong to the dialog route; avoid disposing during its exit animation.
+    Future.delayed(const Duration(seconds:1),(){password.dispose();confirm.dispose();});
+    return result;
+  }
+  Future<void> backup() async {
+    final password=await backupPassword(creating:true);if(password==null)return;
+    try{
+      final bytes=await BackupCrypto().encrypt(await widget.store.backup(),password);
+      final name='RowSkan-${DateTime.now().toIso8601String().substring(0,10)}.rowskan';
+      if(!widget.store.desktop){
+        final dir=await getTemporaryDirectory();final file=File('${dir.path}/$name');await file.writeAsBytes(bytes,flush:true);
+        await SharePlus.instance.share(ShareParams(files:[XFile(file.path)],sharePositionOrigin:const Rect.fromLTWH(0,0,100,100)));
+      }else{
+        final path=await getSaveLocation(suggestedName:name);if(path==null)return;
+        await XFile.fromData(Uint8List.fromList(bytes),mimeType:'application/octet-stream',name:name).saveTo(path.path);
+      }
+      message('Encrypted backup prepared. Store the file and password safely.');
+    }catch(e){message('Backup failed: $e');}
+  }
+  Future<void> import() async {
+    try{
+      final f=await openFile(acceptedTypeGroups:[const XTypeGroup(label:'RowSkan backup',extensions:['zip','rowskan'])]);if(f==null)return;
+      if(await f.length()>310*1024*1024)throw StateError('Backup is too large.');
+      var bytes=await f.readAsBytes();
+      final crypto=BackupCrypto();
+      if(crypto.isEncrypted(bytes)){
+        final password=await backupPassword(creating:false);if(password==null)return;
+        bytes=Uint8List.fromList(await crypto.decrypt(bytes,password));
+      }
+      final count=await widget.store.importBackup(bytes);await reload();
+      message('$count vehicles imported. Existing records preserved.');
+    }catch(e){message('Import failed: $e');}
+  }
   Future<void> details(Map<String,dynamic> v) async {
     await showModalBottomSheet(context:context,isScrollControlled:true,builder:(ctx)=>SafeArea(child:Padding(padding:const EdgeInsets.all(24),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[Text('${v['year']} ${v['make']} ${v['model']}',style:Theme.of(ctx).textTheme.headlineSmall),const SizedBox(height:16),Wrap(spacing:8,runSpacing:8,children:(v['photos'] as List? ?? []).map((n)=>ClipRRect(borderRadius:BorderRadius.circular(8),child:Image.file(widget.store.photo(n as String),width:140,height:100,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Icon(Icons.broken_image)))).toList()),...vehicleFields.map((f)=>Padding(padding:const EdgeInsets.symmetric(vertical:6),child:Text('${f.toUpperCase()}: ${v[f]??''}'))),const SizedBox(height:20),Wrap(spacing:12,children:[FilledButton.icon(onPressed:(){Navigator.pop(ctx);edit(v);},icon:const Icon(Icons.edit_outlined),label:const Text('Edit vehicle')),if(canDelete(mode,desktop:widget.store.desktop))OutlinedButton(onPressed:() async {final ok=await showDialog<bool>(context:ctx,builder:(c)=>AlertDialog(title:const Text('Delete vehicle?'),content:const Text('The record will be hidden. You can restore it in Settings.'),actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Cancel')),TextButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Delete'))]));if(ok==true){try{await widget.store.remove(v['id'] as String);if(ctx.mounted)Navigator.pop(ctx);await reload();}catch(e){message(e);}}},child:const Text('Delete'))else const Text('Team deletion is desktop-only.')])])))));
   }
   @override Widget build(BuildContext context){final wide=MediaQuery.sizeOf(context).width>850;return Scaffold(appBar:AppBar(title:const Text('RowSkan',style:TextStyle(fontWeight:FontWeight.w800)),actions:[Padding(padding:const EdgeInsets.all(12),child:Chip(label:Text(mode=='solo'?'Solo owner · Local':'Team capture · Local')))]),body:Row(children:[if(wide)NavigationRail(selectedIndex:page,onDestinationSelected:(i)=>setState(()=>page=i),labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.directions_car_outlined),label:Text('Inventory')),NavigationRailDestination(icon:Icon(Icons.backup_outlined),label:Text('Backup')),NavigationRailDestination(icon:Icon(Icons.settings_outlined),label:Text('Settings'))]),Expanded(child:Padding(padding:EdgeInsets.all(wide?28:16),child:page==0?inventory():page==1?backups():settings()))]),bottomNavigationBar:wide?null:NavigationBar(selectedIndex:page,onDestinationSelected:(i)=>setState(()=>page=i),destinations:const [NavigationDestination(icon:Icon(Icons.directions_car_outlined),label:'Inventory'),NavigationDestination(icon:Icon(Icons.backup_outlined),label:'Backup'),NavigationDestination(icon:Icon(Icons.settings_outlined),label:'Settings')]),floatingActionButton:page==0?FloatingActionButton.extended(onPressed:()=>edit(),icon:const Icon(Icons.add),label:const Text('Add vehicle')):null);}
   Widget inventory(){final list=records.where((v)=>(filter.isEmpty||v['status']==filter)&&['vin','year','make','model','location'].map((k)=>v[k]??'').join(' ').toLowerCase().contains(query.toLowerCase())).toList();return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Your yard. In order.',style:Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight:FontWeight.w700)),const SizedBox(height:8),Text('${records.length} vehicles · ${records.where((v)=>v['status']=='Available').length} available · Saved on this device'),const SizedBox(height:22),TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),hintText:'Search vehicles, VIN, or yard location'),onChanged:(s)=>setState(()=>query=s)),const SizedBox(height:12),SizedBox(height:40,child:ListView(scrollDirection:Axis.horizontal,children:['',...statuses].map((s)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(s.isEmpty?'All vehicles':s),selected:filter==s,onSelected:(_)=>setState(()=>filter=s)))).toList())),const SizedBox(height:16),Expanded(child:busy?const Center(child:CircularProgressIndicator()):list.isEmpty?Center(child:Column(mainAxisSize:MainAxisSize.min,children:[const Icon(Icons.car_rental,size:70),const SizedBox(height:12),Text(records.isEmpty?'Add your first vehicle':'No matching vehicles',style:Theme.of(context).textTheme.titleLarge),const Text('Scan the VIN, take photographs, and save locally.')])):LayoutBuilder(builder:(context,c)=>GridView.builder(padding:const EdgeInsets.only(bottom:90),gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:c.maxWidth>1000?4:c.maxWidth>650?3:c.maxWidth>420?2:1,mainAxisExtent:290,crossAxisSpacing:14,mainAxisSpacing:14),itemCount:list.length,itemBuilder:(ctx,i){final v=list[i],photos=v['photos'] as List? ?? [];return Card(clipBehavior:Clip.antiAlias,child:InkWell(onTap:()=>details(v),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:photos.isEmpty?Container(color:const Color(0xffdde8df),width:double.infinity,child:const Icon(Icons.directions_car,size:72,color:Color(0xff547163))):Image.file(widget.store.photo(photos.first as String),width:double.infinity,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Center(child:Icon(Icons.broken_image)))),Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(v['status'] as String,style:const TextStyle(color:Color(0xff136b54),fontWeight:FontWeight.bold)),Text('${v['year']} ${v['make']} ${v['model']}',maxLines:1,overflow:TextOverflow.ellipsis,style:Theme.of(ctx).textTheme.titleMedium),const SizedBox(height:6),Text((v['vin']??'').toString().isEmpty?'Manual record':v['vin'] as String,style:const TextStyle(fontSize:11,fontFamily:'monospace')),const SizedBox(height:8),Text('${v['location']??'Unassigned'} · ${photos.length} photos',maxLines:1,overflow:TextOverflow.ellipsis)]) )])));})))]);}
-  Widget backups()=>ListView(children:[Text('Your data stays with you',style:Theme.of(context).textTheme.headlineMedium),const SizedBox(height:20),const Text('Export a ZIP containing all active vehicle records and their photographs. Backups are not encrypted: keep them in a safe location. Deleted records are excluded.'),const SizedBox(height:20),FilledButton.icon(onPressed:backup,icon:const Icon(Icons.download),label:const Text('Export backup')),const SizedBox(height:12),OutlinedButton.icon(onPressed:import,icon:const Icon(Icons.upload_file),label:const Text('Import backup')),const SizedBox(height:28),const Card(child:Padding(padding:EdgeInsets.all(20),child:Text('Device sync is not enabled in this first build. Use backups for manual transfer. Imports add missing records; they do not overwrite existing records or synchronize edits. Cloud subscriptions are not enabled.')))]);
-  Widget settings()=>ListView(children:[Text('Workspace settings',style:Theme.of(context).textTheme.headlineMedium),const SizedBox(height:20),const Text('Operating mode'),const SizedBox(height:8),DropdownButtonFormField<String>(initialValue:mode,items:const [DropdownMenuItem(value:'solo',child:Text('Solo owner')),DropdownMenuItem(value:'team',child:Text('Team capture'))],onChanged:(s) async {if(s==null)return;if(mode=='team'&&!widget.store.desktop){message('Team mode can only be changed on desktop.');return;}await widget.store.setSetting('mode',s);await reload();}),const SizedBox(height:12),const Text('Solo: phone owners can manage and delete vehicles. Team: deletion is restricted to desktop. These are local device policies; administrator enrollment and device authorization are part of the sync phase.'),const SizedBox(height:24),OutlinedButton(onPressed:() async {try{await widget.store.restoreLast();await reload();message('Vehicle restored');}catch(e){message(e);}},child:const Text('Restore last deleted vehicle')),const SizedBox(height:24),const Text('RowSkan 0.1.0 · Product of LIT America\nNo analytics. No cloud inventory uploads.\nVIN lookup sends the entered VIN to NHTSA.\nLocal files use your device’s operating system protection; this build does not add database encryption.')]);
+  Widget backups()=>ListView(children:[Text('Your data stays with you',style:Theme.of(context).textTheme.headlineMedium),const SizedBox(height:20),const Text('Export a ZIP containing all active vehicle records and their photographs. Backups are password encrypted. Keep the password: it cannot be recovered. Deleted records and unfinished drafts are excluded.'),const SizedBox(height:20),FilledButton.icon(onPressed:backup,icon:const Icon(Icons.download),label:const Text('Export backup')),const SizedBox(height:12),OutlinedButton.icon(onPressed:import,icon:const Icon(Icons.upload_file),label:const Text('Import backup')),const SizedBox(height:28),const Card(child:Padding(padding:EdgeInsets.all(20),child:Text('Device sync is not enabled in this first build. Use backups for manual transfer. Imports add missing records; they do not overwrite existing records or synchronize edits. Cloud subscriptions are not enabled.')))]);
+  Widget settings()=>ListView(children:[Text('Workspace settings',style:Theme.of(context).textTheme.headlineMedium),const SizedBox(height:20),const Text('Operating mode'),const SizedBox(height:8),DropdownButtonFormField<String>(initialValue:mode,items:const [DropdownMenuItem(value:'solo',child:Text('Solo owner')),DropdownMenuItem(value:'team',child:Text('Team capture'))],onChanged:(s) async {if(s==null)return;if(mode=='team'&&!widget.store.desktop){message('Team mode can only be changed on desktop.');return;}await widget.store.setSetting('mode',s);await reload();}),const SizedBox(height:12),const Text('Solo: phone owners can manage and delete vehicles. Team: deletion is restricted to desktop. These are local device policies; administrator enrollment and device authorization are part of the sync phase.'),const SizedBox(height:24),OutlinedButton(onPressed:() async {try{await widget.store.restoreLast();await reload();message('Vehicle restored');}catch(e){message(e);}},child:const Text('Restore last deleted vehicle')),const SizedBox(height:24),const Text('RowSkan 0.2.0 · Product of LIT America\nNo analytics. No cloud inventory uploads.\nVIN lookup sends the entered VIN to NHTSA.\nLocal files use your device’s operating system protection; this build does not add database encryption.')]);
 }
 class Intake extends StatefulWidget {
  final Store store;final Map<String,dynamic>? vehicle;const Intake(this.store,{this.vehicle,super.key});
  @override State<Intake> createState()=>_IntakeState();
 }
-class _IntakeState extends State<Intake>{
+class _IntakeState extends State<Intake> with WidgetsBindingObserver {
+ Timer? draftTimer;
+ bool initialized=false;
+ bool savingVehicle=false;
+ Future<void> draftWrites=Future.value();
+ String get draftId=>widget.vehicle==null?'new-vehicle':'edit-${widget.vehicle!["id"]}';
+ Map<String,dynamic> snapshot()=>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text,'status':status,'keys':keys,'photos':List<String>.from(photos),'_step':step};
+ Future<void> persistDraft(){
+  if(!initialized||savingVehicle)return Future.value();
+  final data=snapshot();
+  draftWrites=draftWrites.catchError((Object e){}).then((_)=>widget.store.saveDraft(draftId,data));
+  return draftWrites;
+ }
+ void scheduleDraft(){draftTimer?.cancel();draftTimer=Timer(const Duration(milliseconds:350),(){persistDraft().catchError((Object e){message('Draft could not be saved. Check device storage.');});});}
+ @override void didChangeAppLifecycleState(AppLifecycleState state){if(state==AppLifecycleState.inactive||state==AppLifecycleState.paused){draftTimer?.cancel();persistDraft().catchError((Object e){});}}
+ Future<void> initializeDraft() async {
+  try{
+   final saved=await widget.store.draft(draftId);
+   if(!mounted)return;
+   if(saved!=null){
+    for(final f in vehicleFields){fields[f]!.text=(saved[f]??'').toString();}
+    photos=List<String>.from(saved['photos'] as List? ?? []);status=saved['status'] as String? ?? 'Available';keys=saved['keys'] as String? ?? 'Unknown';step=saved['_step']==1?1:0;
+    hint='Your unfinished vehicle entry was recovered.';
+   }
+   team=await widget.store.setting('mode','solo')=='team';
+   initialized=true;
+   for(final c in fields.values){c.addListener(scheduleDraft);}
+   await recoverCamera();
+  }catch(e){message('Could not recover unfinished entry: $e');initialized=true;}
+  finally{if(mounted)setState(()=>busy=false);}
+ }
  final form=GlobalKey<FormState>();final fields=<String,TextEditingController>{};final picker=ImagePicker();List<String> photos=[];bool busy=false,team=false;int step=0;bool protectedPhoto(int i)=>team&&!widget.store.desktop&&(widget.vehicle?['photos'] as List? ?? []).contains(photos[i]);String status='Available',keys='Unknown',hint='';
- @override void initState(){super.initState();for(final f in vehicleFields){fields[f]=TextEditingController(text:(widget.vehicle?[f]??'').toString());}photos=List<String>.from(widget.vehicle?['photos'] as List? ?? []);status=widget.vehicle?['status'] as String? ?? 'Available';keys=widget.vehicle?['keys'] as String? ?? 'Unknown';widget.store.setting('mode','solo').then((m){if(mounted)setState(()=>team=m=='team');});recoverCamera();}
- Future<void> recoverCamera() async {if(!Platform.isAndroid)return;final response=await picker.retrieveLostData();if(response.files!=null){for(final f in response.files!){if(photos.length<12){final n=await widget.store.copyPhoto(f.path);if(mounted)setState(()=>photos.add(n));}}}if(response.exception!=null&&mounted)setState(()=>hint='Camera recovery failed. Please retake the photo.');}
- @override void dispose(){for(final c in fields.values){c.dispose();}super.dispose();}
+ @override void initState(){
+  super.initState();WidgetsBinding.instance.addObserver(this);busy=true;
+  for(final f in vehicleFields){fields[f]=TextEditingController(text:(widget.vehicle?[f]??'').toString());}
+  photos=List<String>.from(widget.vehicle?['photos'] as List? ?? []);
+  status=widget.vehicle?['status'] as String? ?? 'Available';keys=widget.vehicle?['keys'] as String? ?? 'Unknown';
+  initializeDraft();
+ }
+
+ Future<void> recoverCamera() async {if(!Platform.isAndroid)return;final response=await picker.retrieveLostData();if(response.files!=null){for(final f in response.files!){if(photos.length<12){final n=await widget.store.copyPhoto(f.path);if(mounted){setState(()=>photos.add(n));await persistDraft();}}}}if(response.exception!=null&&mounted)setState(()=>hint='Camera recovery failed. Please retake the photo.');}
+ @override void dispose(){draftTimer?.cancel();WidgetsBinding.instance.removeObserver(this);if(!savingVehicle)persistDraft().catchError((Object e){});for(final c in fields.values){c.dispose();}super.dispose();}
  void message(Object e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString())));}
  Future<void> decode() async {final vin=fields['vin']!.text.trim().toUpperCase();if(!validVin(vin)){message('Enter or scan a valid 17-character VIN.');return;}setState(()=>busy=true);try{final r=await http.get(Uri.https('vpic.nhtsa.dot.gov','/api/vehicles/DecodeVinValues/$vin',{'format':'json'})).timeout(const Duration(seconds:15));if(r.statusCode!=200)throw StateError('Lookup unavailable');final result=(jsonDecode(r.body)['Results'] as List).first as Map;for(final pair in {'year':'ModelYear','make':'Make','model':'Model'}.entries){final s=(result[pair.value]??'').toString();if(s.isNotEmpty)fields[pair.key]!.text=s;}if(mounted)setState(()=>hint='Review decoded details. ${result['ErrorCode']=='0'?'':'The VIN has incomplete or uncertain decoding.'}');}catch(e){message('VIN lookup unavailable. You can fill in the details manually.');}finally{if(mounted)setState(()=>busy=false);}}
  Future<void> scan() async {final vin=await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const ScanVin()));if(vin!=null&&mounted){fields['vin']!.text=vin;await decode();}}
- Future<void> photo(bool camera,{int? replace}) async {if(photos.length>=12&&replace==null){message('Maximum 12 photos per vehicle.');return;}try{final f=await picker.pickImage(source:camera?ImageSource.camera:ImageSource.gallery,maxWidth:1800,maxHeight:1800,imageQuality:82);if(f==null)return;final name=await widget.store.copyPhoto(f.path);if(mounted)setState((){if(replace!=null){photos[replace]=name;}else{photos.add(name);}});}catch(e){message('Photo capture failed. Try Choose photo or check camera permission.');}}
- Future<void> save() async {if(!form.currentState!.validate()){setState(()=>step=0);return;}setState(()=>busy=true);try{final data=<String,dynamic>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text.trim(),'status':status,'keys':keys,'photos':photos};await widget.store.save(data);if(mounted)Navigator.pop(context);}catch(e){message('Could not save: $e');}finally{if(mounted)setState(()=>busy=false);}}
+ Future<void> photo(bool camera,{int? replace}) async {if(photos.length>=12&&replace==null){message('Maximum 12 photos per vehicle.');return;}try{final f=await picker.pickImage(source:camera?ImageSource.camera:ImageSource.gallery,maxWidth:1800,maxHeight:1800,imageQuality:82);if(f==null)return;final name=await widget.store.copyPhoto(f.path);if(mounted)setState((){if(replace!=null){photos[replace]=name;}else{photos.add(name);}});await persistDraft();}catch(e){message('Photo capture failed. Try Choose photo or check camera permission.');}}
+ Future<void> save() async {
+  if(!form.currentState!.validate()){setState(()=>step=0);return;}
+  draftTimer?.cancel();setState(()=>busy=true);
+  try{
+   await persistDraft();await draftWrites;
+   final data=snapshot();savingVehicle=true;
+   await widget.store.save(data,draftId:draftId);
+   if(mounted)Navigator.pop(context);
+  }catch(e){savingVehicle=false;message('Could not save: $e');}
+  finally{if(mounted)setState(()=>busy=false);}
+ }
+
  @override Widget build(BuildContext context) {
    return PopScope(
      canPop: !busy,
      child: Scaffold(
-       appBar: AppBar(title: Text(widget.vehicle == null ? 'Add vehicle' : 'Edit vehicle')),
+       appBar: AppBar(title: Text(widget.vehicle == null ? 'Add vehicle' : 'Edit vehicle'), actions:[if(initialized) TextButton(onPressed:busy?null:() async {final confirm=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(title:const Text('Discard unfinished changes?'),actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Keep draft')),TextButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Discard'))]));if(confirm==true){draftTimer?.cancel();await draftWrites.catchError((Object e){});await widget.store.discardDraft(draftId);savingVehicle=true;if(context.mounted)Navigator.pop(context);}},child:const Text('Discard draft'))]),
        body: Center(
          child: ConstrainedBox(
            constraints: const BoxConstraints(maxWidth: 760),
-           child: Form(
+           child: !initialized ? const Center(child:CircularProgressIndicator()) : Form(
              key: form,
              child: ListView(
                padding: const EdgeInsets.all(20),
@@ -109,11 +203,11 @@ class _IntakeState extends State<Intake>{
        },
      )),
    const SizedBox(height: 14),
-   DropdownButtonFormField<String>(initialValue: status, decoration: const InputDecoration(labelText: 'Status'), items: statuses.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (s) => setState(() => status = s!)),
+   DropdownButtonFormField<String>(initialValue: status, decoration: const InputDecoration(labelText: 'Status'), items: statuses.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (s) {setState(() => status = s!);scheduleDraft();}),
    const SizedBox(height: 14),
-   DropdownButtonFormField<String>(initialValue: keys, decoration: const InputDecoration(labelText: 'Keys'), items: ['Yes', 'No', 'Unknown'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (s) => setState(() => keys = s!)),
+   DropdownButtonFormField<String>(initialValue: keys, decoration: const InputDecoration(labelText: 'Keys'), items: ['Yes', 'No', 'Unknown'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (s) {setState(() => keys = s!);scheduleDraft();}),
    const SizedBox(height: 20),
-   FilledButton(onPressed: busy ? null : () { if (form.currentState!.validate()) setState(() => step = 1); }, child: const Text('Next: photographs')),
+   FilledButton(onPressed: busy ? null : () { if (form.currentState!.validate()) {setState(() => step = 1);scheduleDraft();} }, child: const Text('Next: photographs')),
  ]);
  List<Widget> photoForm() => [
    const Text('Retake draft photos before saving. Up to 12 photos per vehicle.'),
@@ -127,7 +221,7 @@ class _IntakeState extends State<Intake>{
      Image.file(widget.store.photo(photos[i]), height: 130, width: 180, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.broken_image)),
      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
        if (!widget.store.desktop) TextButton(onPressed: busy || protectedPhoto(i) ? null : () => photo(true, replace: i), child: const Text('Retake')),
-       IconButton(tooltip: 'Remove draft photo', onPressed: busy || protectedPhoto(i) ? null : () => setState(() => photos.removeAt(i)), icon: const Icon(Icons.close)),
+       IconButton(tooltip: 'Remove draft photo', onPressed: busy || protectedPhoto(i) ? null : () {setState(() => photos.removeAt(i));scheduleDraft();}, icon: const Icon(Icons.close)),
      ]),
    ])))),
    const SizedBox(height: 24),
@@ -140,3 +234,4 @@ class _IntakeState extends State<Intake>{
 }
 class ScanVin extends StatefulWidget{const ScanVin({super.key});@override State<ScanVin> createState()=>_ScanVinState();}
 class _ScanVinState extends State<ScanVin>{bool done=false;final controller=MobileScannerController();@override void dispose(){controller.dispose();super.dispose();}@override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Scan VIN barcode')),body:Column(children:[const Padding(padding:EdgeInsets.all(20),child:Text('Point the camera at the VIN barcode on the door jamb or paperwork. Manual VIN entry is available on the previous screen.')),Expanded(child:MobileScanner(controller:controller,onDetect:(capture){if(done)return;for(final b in capture.barcodes){var value=(b.rawValue??'').trim().toUpperCase();if(value.startsWith('I')&&value.length==18)value=value.substring(1);if(validVin(value)){done=true;Navigator.pop(context,value);break;}}}))]));}
+
