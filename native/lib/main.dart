@@ -92,11 +92,12 @@ class Intake extends StatefulWidget {
 }
 class _IntakeState extends State<Intake> with WidgetsBindingObserver {
  Timer? draftTimer;
+ int? draftRevision;
  bool initialized=false;
  bool savingVehicle=false;
  Future<void> draftWrites=Future.value();
  String get draftId=>widget.vehicle==null?'new-vehicle':'edit-${widget.vehicle!["id"]}';
- Map<String,dynamic> snapshot()=>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text,'status':status,'keys':keys,'photos':List<String>.from(photos),'_step':step};
+ Map<String,dynamic> snapshot()=>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text,'status':status,'keys':keys,'photos':List<String>.from(photos),'_step':step,if(draftRevision!=null)'_revision':draftRevision};
  Future<void> persistDraft(){
   if(!initialized||savingVehicle)return Future.value();
   final data=snapshot();
@@ -112,7 +113,7 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
    if(saved!=null){
     for(final f in vehicleFields){fields[f]!.text=(saved[f]??'').toString();}
     photos=List<String>.from(saved['photos'] as List? ?? []);status=saved['status'] as String? ?? 'Available';keys=saved['keys'] as String? ?? 'Unknown';step=saved['_step']==1?1:0;
-    hint='Your unfinished vehicle entry was recovered.';
+    draftRevision=saved['_revision'] as int?;hint='Your unfinished vehicle entry was recovered.';
    }
    team=await widget.store.setting('mode','solo')=='team';
    initialized=true;
@@ -123,7 +124,7 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
  }
  final form=GlobalKey<FormState>();final fields=<String,TextEditingController>{};final picker=ImagePicker();List<String> photos=[];bool busy=false,team=false;int step=0;bool protectedPhoto(int i)=>team&&!widget.store.desktop&&(widget.vehicle?['photos'] as List? ?? []).contains(photos[i]);String status='Available',keys='Unknown',hint='';
  @override void initState(){
-  super.initState();WidgetsBinding.instance.addObserver(this);busy=true;
+  super.initState();WidgetsBinding.instance.addObserver(this);busy=true;draftRevision=widget.vehicle?['_revision'] as int?;
   for(final f in vehicleFields){fields[f]=TextEditingController(text:(widget.vehicle?[f]??'').toString());}
   photos=List<String>.from(widget.vehicle?['photos'] as List? ?? []);
   status=widget.vehicle?['status'] as String? ?? 'Available';keys=widget.vehicle?['keys'] as String? ?? 'Unknown';
