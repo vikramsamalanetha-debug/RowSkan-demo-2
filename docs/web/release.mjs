@@ -1,3 +1,5 @@
+import {validateGps} from './geo.mjs';
+import {createGpsField,showWalkingGuide} from './geo-ui.mjs';
 import {sealBackup,openBackup,validateImport} from './backup-crypto.mjs';
 
 const byId=id=>document.getElementById(id);
@@ -34,6 +36,7 @@ byId('importfile').onchange=async e=>{
 };
 const rawSubmit=byId('form').onsubmit;
 let loadedVersion=null;
+let draftGps=null;
 byId('form').onsubmit=async e=>{
  e.preventDefault();const vin=byId('vin').value.trim().toUpperCase();
  if(vin&&!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)){notify('Enter a 17-character VIN or leave it blank.');setStep(0);return;}
@@ -51,7 +54,7 @@ const draftTx=fn=>new Promise((resolve,reject)=>{const t=db.transaction('drafts'
 const dropDraft=id=>draftTx(s=>s.delete(id));
 function persistDraft(){
  if(!draftReady||isSaving||!byId('editor').open)return draftWrites;
- const data={id:draftKey(),fields:Object.fromEntries(fields.map(f=>[f,byId(f).value])),photos:[...draftPhotos],step,base:loadedVersion};
+ const data={id:draftKey(),fields:Object.fromEntries(fields.map(f=>[f,byId(f).value])),photos:[...draftPhotos],gps:draftGps,step,base:loadedVersion};
  draftWrites=draftWrites.catch(()=>{}).then(()=>draftTx(s=>s.put(data)));
  draftWrites.catch(()=>notify('Draft could not be saved. Check browser storage.'));
  return draftWrites;
@@ -59,12 +62,12 @@ function persistDraft(){
 function scheduleDraft(){clearTimeout(draftTimer);draftTimer=setTimeout(persistDraft,250);}
 const rawOpen=openEditor;
 openEditor=async function(vehicle=null){
- draftReady=false;loadedVersion=vehicle?JSON.stringify(vehicle):null;rawOpen(vehicle);byId('next').disabled=true;
+ draftReady=false;draftGps=validateGps(vehicle?.gps);loadedVersion=vehicle?JSON.stringify(vehicle):null;rawOpen(vehicle);byId('next').disabled=true;
  try{
   await draftWrites;
   const draft=await new Promise((resolve,reject)=>{const r=db.transaction('drafts').objectStore('drafts').get(draftKey());r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
-  if(draft){if(vehicle)loadedVersion=draft.base??null;for(const f of fields)byId(f).value=draft.fields[f]??'';draftPhotos=[...draft.photos];setStep(draft.step===1?1:0);thumbs();byId('photoMsg').textContent='Recovered your unfinished vehicle entry.';}
-  draftReady=true;
+  if(draft){draftGps=validateGps(draft.gps);if(vehicle)loadedVersion=draft.base??null;for(const f of fields)byId(f).value=draft.fields[f]??'';draftPhotos=[...draft.photos];setStep(draft.step===1?1:0);thumbs();byId('photoMsg').textContent='Recovered your unfinished vehicle entry.';}
+  gpsInput.setValue(draftGps);draftReady=true;
  }catch(e){showError(e)}finally{byId('next').disabled=false}
 };
 byId('form').addEventListener('input',scheduleDraft);
@@ -97,6 +100,7 @@ storageStatus();
 
 // Serialize the final conflict/VIN check and write in one IndexedDB transaction.
 window.rowskanSave=(vehicle,previousId)=>new Promise((resolve,reject)=>{
+ vehicle.gps=validateGps(draftGps);
  const transaction=db.transaction('vehicles','readwrite'),store=transaction.objectStore('vehicles');let failure;
  const request=store.getAll();
  request.onsuccess=()=>{
@@ -138,4 +142,23 @@ scanButton.onclick=async()=>{
   }
   detect();
  }catch(e){dialog.close();notify('Camera or barcode reader unavailable. Enter the VIN manually.');}
+};
+
+
+
+const gpsInput=createGpsField({onChange:value=>{draftGps=value;scheduleDraft();}});
+byId('detailsStep').prepend(gpsInput.element);
+byId('editor').addEventListener('close',()=>gpsInput.cancel());
+const previousDetail=openDetail;
+openDetail=function(id){
+ previousDetail(id);const vehicle=vehicles.find(v=>v.id===id);if(!vehicle)return;
+ const gps=validateGps(vehicle.gps),panel=document.createElement('section');panel.style.margin='16px 0';
+ if(gps){const find=document.createElement('button');find.className='primary';find.textContent='Find this vehicle';find.onclick=()=>showWalkingGuide(vehicle);panel.append(find);}
+ const control=createGpsField({value:gps,onChange:async value=>{
+  try{
+   await new Promise((resolve,reject)=>{const transaction=db.transaction('vehicles','readwrite'),store=transaction.objectStore('vehicles');const request=store.get(id);let failure;request.onsuccess=()=>{if(!request.result){failure=Error('Vehicle no longer exists.');transaction.abort();return;}store.put({...request.result,gps:validateGps(value),updated:Date.now()});};transaction.oncomplete=resolve;transaction.onerror=()=>reject(failure||transaction.error);transaction.onabort=()=>reject(failure||transaction.error);});
+   await refresh();byId('detail').close();openDetail(id);notify('Vehicle GPS location updated.');
+  }catch(e){showError(e);throw e;}
+ }});
+ panel.append(control.element);byId('detailBody').prepend(panel);byId('detail').addEventListener('close',()=>control.cancel(),{once:true});
 };

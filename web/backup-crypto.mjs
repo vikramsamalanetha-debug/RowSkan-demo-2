@@ -1,3 +1,4 @@
+import {validateGps} from './geo.mjs';
 const encoder=new TextEncoder(), decoder=new TextDecoder();
 const b64=bytes=>{let text='';for(let i=0;i<bytes.length;i+=8192)text+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(text)};
 const unb64=text=>Uint8Array.from(atob(text),c=>c.charCodeAt(0));
@@ -34,6 +35,7 @@ export function validateImport(input,existing=[]){
    if(item[f]!=null&&!['string','number'].includes(typeof item[f]))throw Error('Invalid vehicle field.');
    v[f]=String(item[f]??'').trim();if(v[f].length>(f==='notes'?8000:160))throw Error('Vehicle field is too long.');
   }
+  v.gps=validateGps(item.gps);
   v.vin=v.vin.toUpperCase();
   if(v.vin&&!/^[A-HJ-NPR-Z0-9]{17}$/.test(v.vin))throw Error('Invalid VIN.');
   if(!v.make||!v.model||!statuses.includes(v.status))throw Error('Vehicle details are incomplete.');
@@ -45,3 +47,4 @@ export function validateImport(input,existing=[]){
  }
  return result;
 }
+

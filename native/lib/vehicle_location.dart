@@ -100,7 +100,24 @@ class _AdjustVehiclePinState extends State<AdjustVehiclePin>{
  void pick(Offset point,Size size){if(anchor==null)return;try{final gps=offsetGps(anchor!,((point.dx/size.width)-.5)*range*2,(.5-point.dy/size.height)*range*2);setState((){latitude.text=(gps['lat'] as num).toStringAsFixed(7);longitude.text=(gps['lon'] as num).toStringAsFixed(7);});}catch(e){setState(()=>error=e.toString());}}
  void save(){try{final gps=validateGps({'lat':double.tryParse(latitude.text),'lon':double.tryParse(longitude.text),'accuracyMeters':null,'source':'manual','capturedAt':DateTime.now().toUtc().toIso8601String()});Navigator.pop(context,gps);}catch(e){setState(()=>error='Enter valid latitude (-90 to 90) and longitude (-180 to 180).');}}
  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Adjust vehicle pin')),body:ListView(padding:const EdgeInsets.all(20),children:[const Text('Enter coordinates, or tap the local yard grid around the saved pin. This grid has no satellite imagery. North is up.'),const SizedBox(height:16),
-  if(anchor!=null)...[SizedBox(height:240,child:LayoutBuilder(builder:(c,size)=>GestureDetector(onTapDown:(d)=>pick(d.localPosition,Size(size.maxWidth,240)),onPanUpdate:(d)=>pick(d.localPosition,Size(size.maxWidth,240)),child:Container(color:const Color(0xffe8efe7),child:const Center(child:Text('N ↑\n\nTap or drag to place vehicle\n\nSaved reference at center',textAlign:TextAlign.center)))))),Slider(value:range,min:10,max:200,divisions:19,label:'±${range.round()} m',onChanged:(n)=>setState(()=>range=n)),Text('Grid extent ±${range.round()} m from saved reference')],
+  if(anchor!=null)...[SizedBox(height:240,child:LayoutBuilder(builder:(c,size)=>GestureDetector(onTapDown:(d)=>pick(d.localPosition,Size(size.maxWidth,240)),onPanUpdate:(d)=>pick(d.localPosition,Size(size.maxWidth,240)),child:CustomPaint(painter:PinEditorPainter(anchor:anchor!,latitude:double.tryParse(latitude.text),longitude:double.tryParse(longitude.text),range:range),child:const SizedBox.expand())))),Slider(value:range,min:10,max:200,divisions:19,label:'±${range.round()} m',onChanged:(n)=>setState(()=>range=n)),Text('Grid extent ±${range.round()} m from saved reference')],
   const SizedBox(height:16),TextField(controller:latitude,decoration:const InputDecoration(labelText:'Latitude'),keyboardType:const TextInputType.numberWithOptions(decimal:true,signed:true)),const SizedBox(height:12),TextField(controller:longitude,decoration:const InputDecoration(labelText:'Longitude'),keyboardType:const TextInputType.numberWithOptions(decimal:true,signed:true)),if(error.isNotEmpty)Text(error,style:const TextStyle(color:Colors.red)),const SizedBox(height:16),FilledButton(onPressed:save,child:const Text('Use corrected pin')),const SizedBox(height:12),const Text('Manual corrections have no measured GPS accuracy. Saving this screen updates the intake field; save the vehicle to confirm the change.'),
  ]));
+}
+
+class PinEditorPainter extends CustomPainter {
+ final Map<String,dynamic> anchor;final double? latitude,longitude;final double range;
+ PinEditorPainter({required this.anchor,required this.latitude,required this.longitude,required this.range});
+ @override void paint(Canvas canvas,Size size){
+  canvas.drawRect(Offset.zero&size,Paint()..color=const Color(0xffedf3e8));
+  final grid=Paint()..color=const Color(0xffc9d8c9)..strokeWidth=1;
+  for(var i=1;i<4;i++){canvas.drawLine(Offset(size.width*i/4,0),Offset(size.width*i/4,size.height),grid);canvas.drawLine(Offset(0,size.height*i/4),Offset(size.width,size.height*i/4),grid);}
+  canvas.drawCircle(Offset(size.width/2,size.height/2),4,Paint()..color=const Color(0xff6d7d80));
+  final lat=latitude??(anchor['lat'] as num).toDouble(),lon=longitude??(anchor['lon'] as num).toDouble();
+  final north=(lat-(anchor['lat'] as num))*111195,east=(((lon-(anchor['lon'] as num)+540)%360)-180)*111195*math.cos((anchor['lat'] as num)*math.pi/180);
+  final point=Offset((size.width/2+east/(range*2)*size.width).clamp(8,size.width-8).toDouble(),(size.height/2-north/(range*2)*size.height).clamp(8,size.height-8).toDouble());
+  canvas.drawCircle(point,9,Paint()..color=const Color(0xffd97420));
+  final text=TextPainter(text:const TextSpan(text:'N ↑   ·   Tap or drag to move pin',style:TextStyle(color:Color(0xff182d33),fontSize:13)),textDirection:TextDirection.ltr)..layout();text.paint(canvas,Offset((size.width-text.width)/2,8));
+ }
+ @override bool shouldRepaint(covariant PinEditorPainter old)=>old.latitude!=latitude||old.longitude!=longitude||old.range!=range;
 }
