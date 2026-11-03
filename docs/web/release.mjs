@@ -1,6 +1,8 @@
 import {sealBackup,openBackup,validateImport} from './backup-crypto.mjs';
 
 const byId=id=>document.getElementById(id);
+const originalNotify=notify;
+notify=function(message){(document.querySelector('dialog[open]')||document.body).append(byId('toast'));originalNotify(message);};
 const showError=e=>notify(e instanceof Error?e.message:String(e));
 function download(data,name){const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function secretDialog(creating){

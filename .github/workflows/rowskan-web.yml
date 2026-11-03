@@ -1,10 +1,10 @@
 name: RowSkan browser checks
 on:
   pull_request:
-    paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', '.github/workflows/rowskan-web.yml']
+    paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', 'sync-relay/**', '.github/workflows/rowskan-web.yml']
   push:
     branches: ['main']
-    paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', '.github/workflows/rowskan-web.yml']
+    paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', 'sync-relay/**', '.github/workflows/rowskan-web.yml']
 permissions:
   contents: read
 jobs:
@@ -18,3 +18,9 @@ jobs:
       - run: node --test tests/*.test.mjs
       - run: node --check web/release.mjs
       - run: node --check sw.js
+      - name: Install relay dependencies
+        run: npm ci --ignore-scripts
+        working-directory: sync-relay
+      - name: Test relay isolation and bounds
+        run: npm test
+        working-directory: sync-relay
