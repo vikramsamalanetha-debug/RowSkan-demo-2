@@ -1,4 +1,4 @@
-name: RowSkan native preview
+name: RowSkan release checks
 on:
   pull_request:
     paths: ['native/**', '.github/workflows/rowskan-native.yml']
@@ -19,7 +19,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: android
-          - os: windows-latest
+          - os: windows-2022
             target: windows
           - os: macos-14
             target: macos
@@ -63,6 +63,9 @@ jobs:
       - name: Build Mac preview
         if: matrix.target == 'macos'
         run: flutter build macos --release
+      - name: Verify Windows SQLite runtime is packaged
+        if: matrix.target == 'windows'
+        run: test -f build/windows/x64/runner/Release/sqlite3.dll
       - name: Upload Android test APK
         if: matrix.target == 'android'
         uses: actions/upload-artifact@v4
@@ -87,3 +90,4 @@ jobs:
           name: RowSkan-Mac-preview
           path: native/RowSkan-Mac.zip
           retention-days: 7
+

@@ -1,0 +1,30 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      BIND_HOST: 0.0.0.0
+      PORT: 8787
+    expose:
+      - '8787'
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      ROWSKAN_SYNC_DOMAIN: ${ROWSKAN_SYNC_DOMAIN:?Set the dedicated sync hostname first}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy_config:/config
+volumes:
+  certificates:
+  caddy_config:
