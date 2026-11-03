@@ -8,6 +8,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:file_selector/file_selector.dart';
 import 'store.dart';
+import 'geo_math.dart';
+import 'vehicle_location.dart';
 import 'backup_crypto.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -79,7 +81,7 @@ class _InventoryState extends State<Inventory> {
     }catch(e){message('Import failed: $e');}
   }
   Future<void> details(Map<String,dynamic> v) async {
-    await showModalBottomSheet(context:context,isScrollControlled:true,builder:(ctx)=>SafeArea(child:Padding(padding:const EdgeInsets.all(24),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[Text('${v['year']} ${v['make']} ${v['model']}',style:Theme.of(ctx).textTheme.headlineSmall),const SizedBox(height:16),Wrap(spacing:8,runSpacing:8,children:(v['photos'] as List? ?? []).map((n)=>ClipRRect(borderRadius:BorderRadius.circular(8),child:Image.file(widget.store.photo(n as String),width:140,height:100,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Icon(Icons.broken_image)))).toList()),...vehicleFields.map((f)=>Padding(padding:const EdgeInsets.symmetric(vertical:6),child:Text('${f.toUpperCase()}: ${v[f]??''}'))),const SizedBox(height:20),Wrap(spacing:12,children:[FilledButton.icon(onPressed:(){Navigator.pop(ctx);edit(v);},icon:const Icon(Icons.edit_outlined),label:const Text('Edit vehicle')),if(canDelete(mode,desktop:widget.store.desktop))OutlinedButton(onPressed:() async {final ok=await showDialog<bool>(context:ctx,builder:(c)=>AlertDialog(title:const Text('Delete vehicle?'),content:const Text('The record will be hidden. You can restore it in Settings.'),actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Cancel')),TextButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Delete'))]));if(ok==true){try{await widget.store.remove(v['id'] as String);if(ctx.mounted)Navigator.pop(ctx);await reload();}catch(e){message(e);}}},child:const Text('Delete'))else const Text('Team deletion is desktop-only.')])])))));
+    await showModalBottomSheet(context:context,isScrollControlled:true,builder:(ctx)=>SafeArea(child:Padding(padding:const EdgeInsets.all(24),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[Text('${v['year']} ${v['make']} ${v['model']}',style:Theme.of(ctx).textTheme.headlineSmall),const SizedBox(height:16),Wrap(spacing:8,runSpacing:8,children:(v['photos'] as List? ?? []).map((n)=>ClipRRect(borderRadius:BorderRadius.circular(8),child:Image.file(widget.store.photo(n as String),width:140,height:100,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Icon(Icons.broken_image)))).toList()),if(v['gps']!=null)Padding(padding:const EdgeInsets.symmetric(vertical:12),child:FilledButton.icon(onPressed:(){Navigator.push(ctx,MaterialPageRoute(builder:(_)=>FindVehicle(target:validateGps(v['gps'])!,title:'${v['year']} ${v['make']} ${v['model']}',yard:(v['location']??'').toString())));},icon:const Icon(Icons.navigation),label:const Text('Find this vehicle'))),VehicleLocationField(value:validateGps(v['gps']),onChanged:(value) async {try{await widget.store.save({...v,'gps':value});if(ctx.mounted)Navigator.pop(ctx);await reload();message('Vehicle GPS location updated');}catch(e){message(e);}}),...vehicleFields.map((f)=>Padding(padding:const EdgeInsets.symmetric(vertical:6),child:Text('${f.toUpperCase()}: ${v[f]??''}'))),const SizedBox(height:20),Wrap(spacing:12,children:[FilledButton.icon(onPressed:(){Navigator.pop(ctx);edit(v);},icon:const Icon(Icons.edit_outlined),label:const Text('Edit vehicle')),if(canDelete(mode,desktop:widget.store.desktop))OutlinedButton(onPressed:() async {final ok=await showDialog<bool>(context:ctx,builder:(c)=>AlertDialog(title:const Text('Delete vehicle?'),content:const Text('The record will be hidden. You can restore it in Settings.'),actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Cancel')),TextButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Delete'))]));if(ok==true){try{await widget.store.remove(v['id'] as String);if(ctx.mounted)Navigator.pop(ctx);await reload();}catch(e){message(e);}}},child:const Text('Delete'))else const Text('Team deletion is desktop-only.')])])))));
   }
   @override Widget build(BuildContext context){final wide=MediaQuery.sizeOf(context).width>850;return Scaffold(appBar:AppBar(title:const Text('RowSkan',style:TextStyle(fontWeight:FontWeight.w800)),actions:[Padding(padding:const EdgeInsets.all(12),child:Chip(label:Text(mode=='solo'?'Solo owner · Local':'Team capture · Local')))]),body:Row(children:[if(wide)NavigationRail(selectedIndex:page,onDestinationSelected:(i)=>setState(()=>page=i),labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.directions_car_outlined),label:Text('Inventory')),NavigationRailDestination(icon:Icon(Icons.backup_outlined),label:Text('Backup')),NavigationRailDestination(icon:Icon(Icons.settings_outlined),label:Text('Settings'))]),Expanded(child:Padding(padding:EdgeInsets.all(wide?28:16),child:page==0?inventory():page==1?backups():settings()))]),bottomNavigationBar:wide?null:NavigationBar(selectedIndex:page,onDestinationSelected:(i)=>setState(()=>page=i),destinations:const [NavigationDestination(icon:Icon(Icons.directions_car_outlined),label:'Inventory'),NavigationDestination(icon:Icon(Icons.backup_outlined),label:'Backup'),NavigationDestination(icon:Icon(Icons.settings_outlined),label:'Settings')]),floatingActionButton:page==0?FloatingActionButton.extended(onPressed:()=>edit(),icon:const Icon(Icons.add),label:const Text('Add vehicle')):null);}
   Widget inventory(){final list=records.where((v)=>(filter.isEmpty||v['status']==filter)&&['vin','year','make','model','location'].map((k)=>v[k]??'').join(' ').toLowerCase().contains(query.toLowerCase())).toList();return Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Your yard. In order.',style:Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight:FontWeight.w700)),const SizedBox(height:8),Text('${records.length} vehicles · ${records.where((v)=>v['status']=='Available').length} available · Saved on this device'),const SizedBox(height:22),TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),hintText:'Search vehicles, VIN, or yard location'),onChanged:(s)=>setState(()=>query=s)),const SizedBox(height:12),SizedBox(height:40,child:ListView(scrollDirection:Axis.horizontal,children:['',...statuses].map((s)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(s.isEmpty?'All vehicles':s),selected:filter==s,onSelected:(_)=>setState(()=>filter=s)))).toList())),const SizedBox(height:16),Expanded(child:busy?const Center(child:CircularProgressIndicator()):list.isEmpty?Center(child:Column(mainAxisSize:MainAxisSize.min,children:[const Icon(Icons.car_rental,size:70),const SizedBox(height:12),Text(records.isEmpty?'Add your first vehicle':'No matching vehicles',style:Theme.of(context).textTheme.titleLarge),const Text('Scan the VIN, take photographs, and save locally.')])):LayoutBuilder(builder:(context,c)=>GridView.builder(padding:const EdgeInsets.only(bottom:90),gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:c.maxWidth>1000?4:c.maxWidth>650?3:c.maxWidth>420?2:1,mainAxisExtent:290,crossAxisSpacing:14,mainAxisSpacing:14),itemCount:list.length,itemBuilder:(ctx,i){final v=list[i],photos=v['photos'] as List? ?? [];return Card(clipBehavior:Clip.antiAlias,child:InkWell(onTap:()=>details(v),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:photos.isEmpty?Container(color:const Color(0xffdde8df),width:double.infinity,child:const Icon(Icons.directions_car,size:72,color:Color(0xff547163))):Image.file(widget.store.photo(photos.first as String),width:double.infinity,fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Center(child:Icon(Icons.broken_image)))),Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(v['status'] as String,style:const TextStyle(color:Color(0xff136b54),fontWeight:FontWeight.bold)),Text('${v['year']} ${v['make']} ${v['model']}',maxLines:1,overflow:TextOverflow.ellipsis,style:Theme.of(ctx).textTheme.titleMedium),const SizedBox(height:6),Text((v['vin']??'').toString().isEmpty?'Manual record':v['vin'] as String,style:const TextStyle(fontSize:11,fontFamily:'monospace')),const SizedBox(height:8),Text('${v['location']??'Unassigned'} · ${photos.length} photos',maxLines:1,overflow:TextOverflow.ellipsis)]) )])));})))]);}
@@ -93,11 +95,12 @@ class Intake extends StatefulWidget {
 class _IntakeState extends State<Intake> with WidgetsBindingObserver {
  Timer? draftTimer;
  int? draftRevision;
+ Map<String,dynamic>? gps;
  bool initialized=false;
  bool savingVehicle=false;
  Future<void> draftWrites=Future.value();
  String get draftId=>widget.vehicle==null?'new-vehicle':'edit-${widget.vehicle!["id"]}';
- Map<String,dynamic> snapshot()=>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text,'status':status,'keys':keys,'photos':List<String>.from(photos),'_step':step,if(draftRevision!=null)'_revision':draftRevision};
+ Map<String,dynamic> snapshot()=>{...?widget.vehicle,for(final f in vehicleFields)f:fields[f]!.text,'status':status,'keys':keys,'photos':List<String>.from(photos),'gps':gps,'_step':step,if(draftRevision!=null)'_revision':draftRevision};
  Future<void> persistDraft(){
   if(!initialized||savingVehicle)return Future.value();
   final data=snapshot();
@@ -113,7 +116,7 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
    if(saved!=null){
     for(final f in vehicleFields){fields[f]!.text=(saved[f]??'').toString();}
     photos=List<String>.from(saved['photos'] as List? ?? []);status=saved['status'] as String? ?? 'Available';keys=saved['keys'] as String? ?? 'Unknown';step=saved['_step']==1?1:0;
-    draftRevision=saved['_revision'] as int?;hint='Your unfinished vehicle entry was recovered.';
+    gps=validateGps(saved['gps']);draftRevision=saved['_revision'] as int?;hint='Your unfinished vehicle entry was recovered.';
    }
    team=await widget.store.setting('mode','solo')=='team';
    initialized=true;
@@ -124,7 +127,7 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
  }
  final form=GlobalKey<FormState>();final fields=<String,TextEditingController>{};final picker=ImagePicker();List<String> photos=[];bool busy=false,team=false;int step=0;bool protectedPhoto(int i)=>team&&!widget.store.desktop&&(widget.vehicle?['photos'] as List? ?? []).contains(photos[i]);String status='Available',keys='Unknown',hint='';
  @override void initState(){
-  super.initState();WidgetsBinding.instance.addObserver(this);busy=true;draftRevision=widget.vehicle?['_revision'] as int?;
+  super.initState();WidgetsBinding.instance.addObserver(this);busy=true;gps=validateGps(widget.vehicle?['gps']);draftRevision=widget.vehicle?['_revision'] as int?;
   for(final f in vehicleFields){fields[f]=TextEditingController(text:(widget.vehicle?[f]??'').toString());}
   photos=List<String>.from(widget.vehicle?['photos'] as List? ?? []);
   status=widget.vehicle?['status'] as String? ?? 'Available';keys=widget.vehicle?['keys'] as String? ?? 'Unknown';
@@ -178,6 +181,8 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
    );
  }
  Widget detailsForm() => Column(children: [
+   VehicleLocationField(value:gps,onChanged:(value){setState(()=>gps=value);scheduleDraft();}),
+   const SizedBox(height:14),
    TextFormField(
      controller: fields['vin'], textCapitalization: TextCapitalization.characters,
      decoration: const InputDecoration(labelText: 'VIN (optional for manual records)'),
@@ -235,4 +240,5 @@ class _IntakeState extends State<Intake> with WidgetsBindingObserver {
 }
 class ScanVin extends StatefulWidget{const ScanVin({super.key});@override State<ScanVin> createState()=>_ScanVinState();}
 class _ScanVinState extends State<ScanVin>{bool done=false;final controller=MobileScannerController();@override void dispose(){controller.dispose();super.dispose();}@override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:const Text('Scan VIN barcode')),body:Column(children:[const Padding(padding:EdgeInsets.all(20),child:Text('Point the camera at the VIN barcode on the door jamb or paperwork. Manual VIN entry is available on the previous screen.')),Expanded(child:MobileScanner(controller:controller,onDetect:(capture){if(done)return;for(final b in capture.barcodes){var value=(b.rawValue??'').trim().toUpperCase();if(value.startsWith('I')&&value.length==18)value=value.substring(1);if(validVin(value)){done=true;Navigator.pop(context,value);break;}}}))]));}
+
 

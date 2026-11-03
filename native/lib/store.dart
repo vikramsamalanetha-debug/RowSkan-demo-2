@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'geo_math.dart';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -106,6 +107,7 @@ class Store {
       names.add(name);
     }
     v['photos']=names;
+    v['gps']=validateGps(input['gps']);
     if(input['_revision']!=null){
       if(input['_revision'] is! int)throw StateError('Invalid record revision.');
       v['_revision']=input['_revision'];
@@ -129,7 +131,9 @@ class Store {
         revision=(old['revision'] as int)+1;
         final settings=await t.query('settings',where:'key=?',whereArgs:['mode']);
         if(settings.isNotEmpty&&settings.first['value']=='team'&&!desktop){
-          final original=(jsonDecode(old['data'] as String)['photos'] as List).cast<String>();
+          final previous=jsonDecode(old['data'] as String) as Map;
+          if(previous['gps']!=null&&v['gps']==null)throw StateError('Saved team GPS locations can only be removed on desktop.');
+          final original=(previous['photos'] as List).cast<String>();
           if(!original.every((v['photos'] as List<String>).contains))throw StateError('Saved team photos can only be removed on desktop.');
         }
       }
@@ -276,3 +280,4 @@ void inspectZipDirectory(List<int> bytes){
   }
   if(at!=end||!names.contains('inventory.json'))throw StateError('Invalid backup directory.');
 }
+
