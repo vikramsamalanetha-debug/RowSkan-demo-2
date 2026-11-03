@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', '.github/workflows/rowskan-web.yml']
   push:
-    branches: ['main', 'production/local-first-release']
+    branches: ['main']
     paths: ['index.html', 'web/**', 'tests/**', 'sw.js', 'manifest.webmanifest', '.github/workflows/rowskan-web.yml']
 permissions:
   contents: read

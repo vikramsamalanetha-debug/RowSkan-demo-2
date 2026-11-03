@@ -29,3 +29,12 @@ if p.exists():
     import re
     s=p.read_text();s=re.sub(r"#?\s*platform :ios, '[^']+'", "platform :ios, '15.5'",s);p.write_text(s)
 print('RowSkan permissions configured. Review Apple deployment target in Xcode.')
+
+
+# Keep Xcode project targets aligned with scanner plugin requirements.
+p=root/'ios/Runner.xcodeproj/project.pbxproj'
+if p.exists():
+    import re
+    s=p.read_text()
+    s=re.sub(r'IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;', 'IPHONEOS_DEPLOYMENT_TARGET = 15.5;',s)
+    p.write_text(s)

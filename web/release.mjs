@@ -92,3 +92,48 @@ if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js').cat
 const badge=byId('connectionBadge');const connection=()=>{badge.textContent=navigator.onLine?'● Local inventory · Online':'● Local inventory · Offline'};
 window.addEventListener('online',connection);window.addEventListener('offline',connection);connection();
 storageStatus();
+
+// Serialize the final conflict/VIN check and write in one IndexedDB transaction.
+window.rowskanSave=(vehicle,previousId)=>new Promise((resolve,reject)=>{
+ const transaction=db.transaction('vehicles','readwrite'),store=transaction.objectStore('vehicles');let failure;
+ const request=store.getAll();
+ request.onsuccess=()=>{
+  const records=request.result,current=records.find(v=>v.id===previousId);
+  if(previousId&&(!current||JSON.stringify(current)!==loadedVersion)){failure=Error('Record changed in another tab. Reopen it before saving.');transaction.abort();return;}
+  if(vehicle.vin&&records.some(v=>v.id!==vehicle.id&&v.vin===vehicle.vin)){failure=Error('This VIN is already in inventory.');transaction.abort();return;}
+  store.put({...vehicle,updated:Date.now()});
+ };
+ transaction.oncomplete=resolve;
+ transaction.onerror=()=>reject(failure||transaction.error);
+ transaction.onabort=()=>reject(failure||transaction.error||Error('Save canceled'));
+});
+
+const scanButton=document.createElement('button');scanButton.type='button';scanButton.textContent='Scan VIN barcode';
+byId('decode').parentElement.insertAdjacentElement('afterend',scanButton);
+scanButton.style.marginTop='8px';
+scanButton.onclick=async()=>{
+ if(!('BarcodeDetector' in window)||!navigator.mediaDevices?.getUserMedia){notify('Live barcode scanning is not supported in this browser. Use manual VIN entry or the native app.');return;}
+ const dialog=document.createElement('dialog');dialog.innerHTML='<div class="dialoghead"><h2>Scan VIN barcode</h2><button aria-label="Close scanner">×</button></div><p>Aim at the barcode on the door jamb or vehicle paperwork.</p><video autoplay playsinline muted style="width:100%;max-height:55vh;background:#132e2b;border-radius:8px"></video><p class="hint" role="status">Starting camera…</p>';
+ document.body.append(dialog);let stream,stopped=false,timer;
+ const stop=()=>{stopped=true;clearTimeout(timer);stream?.getTracks().forEach(track=>track.stop());dialog.remove()};
+ dialog.querySelector('button').onclick=()=>dialog.close();dialog.onclose=stop;dialog.showModal();
+ try{
+  const supported=await BarcodeDetector.getSupportedFormats();
+  const formats=['code_39','code_128','pdf417','data_matrix','qr_code'].filter(f=>supported.includes(f));
+  if(!formats.length)throw Error('No supported VIN barcode reader.');
+  const detector=new BarcodeDetector({formats});
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+  if(stopped){stream.getTracks().forEach(t=>t.stop());return;}
+  const video=dialog.querySelector('video');video.srcObject=stream;await video.play();
+  const message=dialog.querySelector('[role="status"]');message.textContent='Looking for a 17-character VIN…';
+  async function detect(){
+   if(stopped)return;
+   try{
+    const results=await detector.detect(video);
+    for(const result of results){let value=String(result.rawValue||'').trim().toUpperCase();if(value.length===18&&value.startsWith('I'))value=value.slice(1);if(/^[A-HJ-NPR-Z0-9]{17}$/.test(value)){byId('vin').value=value;scheduleDraft();dialog.close();notify('VIN scanned. Tap Decode VIN to look up details.');return;}}
+   }catch{message.textContent='Keep the barcode steady, or close and enter the VIN manually.';}
+   if(!stopped)timer=setTimeout(detect,250);
+  }
+  detect();
+ }catch(e){dialog.close();notify('Camera or barcode reader unavailable. Enter the VIN manually.');}
+};
