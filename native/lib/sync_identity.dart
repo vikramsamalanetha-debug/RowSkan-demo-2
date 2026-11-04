@@ -79,6 +79,7 @@ class SyncIdentity {
  }
  Future<String> requestCode(String label,{required bool desktop}) async =>encodeCode({'format':'rowskan-pair-request','v':1,'publicKey':publicKey,'proof':await _sign({'publicKey':publicKey,'label':label.trim().substring(0,label.trim().length.clamp(0,80).toInt()),'desktop':desktop})});
  Future<void> createWorkspace(String endpoint,{required String label}) async {
+  if(label.trim().isEmpty||label.trim().length>80)throw StateError('Use a device name of 1 to 80 characters.');
   validateEndpoint(endpoint);final secret=base64Encode(await SecretKeyData.random(length:32).extractBytes());final workspace=const Uuid().v4();
   final certificate=await _sign({'workspace':workspace,'epoch':1,'publicKey':publicKey,'role':'owner','label':label});
   profile=SyncProfile(workspace:workspace,ownerKey:publicKey,secret:secret,certificate:certificate,endpoint:endpoint.trim(),epoch:1);await _persist();

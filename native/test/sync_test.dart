@@ -87,5 +87,17 @@ void main(){
   await phone.connect();await eventually(() async=>(await b.all()).single['notes']=='offline pending edit');
   await a.remove('vehicle-one');await eventually(() async=>(await b.all()).isEmpty);
   expect((await b.deleted()).length,1);
+  final dataFrames=relay.frames.where((frame){final header=(jsonDecode(utf8.decode(frame)) as Map)['header'] as Map;return header['type']=='data'&&header['to']==phone.deviceId;}).toList();
+  final replay=dataFrames.last;
+  for(final socket in relay.clients.keys.toList()){socket.add(replay);}
+  await Future<void>.delayed(const Duration(milliseconds:100));
+  expect(await b.all(),isEmpty);expect((await b.deleted()).length,1);
+  final forged=jsonDecode(utf8.decode(replay)) as Map;
+  (forged['header'] as Map)['sequence']=phone.transport.peers[owner.deviceId]!.received+1;
+  forged['ciphertext']='AAAA';
+  for(final socket in relay.clients.keys.toList()){socket.add(utf8.encode(jsonEncode(forged)));}
+  await eventually(() async=>!phone.transport.connected);
+  expect(await b.all(),isEmpty);expect(phone.status,contains('rejected'));
+
  },timeout:const Timeout(Duration(seconds:60)));
 }
