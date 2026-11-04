@@ -43,8 +43,7 @@ class SyncTransport {
    if(generation!=connection){await ws.close();return;}
    ws.pingInterval=const Duration(seconds:20);socket=ws;
    ws.listen((event){
-    incoming=incoming.catchError((Object e){onStatus('Sync message rejected: $e');}).then((_) async {if(generation==connection)await _receive(event,generation);});
-    incoming.catchError((Object e){onStatus('Sync message rejected: $e');});
+    incoming=incoming.catchError((Object e){}).then((_) async {if(generation==connection)await _receive(event,generation);}).catchError((Object e) async {if(generation==connection){await disconnect();onStatus('Sync message rejected; reconnect to resume: $e');}});
    },onDone:(){if(generation==connection){socket=null;peers.clear();onStatus('Disconnected. Your local changes are kept.');}},onError:(Object e){if(generation==connection)onStatus('Relay connection failed. Your data stays local.');});
    ws.add(jsonEncode({'type':'join','room':await identity.room,'peer':identity.id}));
    onStatus('Connecting to relay…');

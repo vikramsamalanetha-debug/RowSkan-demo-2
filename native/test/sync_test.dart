@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,7 +69,15 @@ void main(){
   await owner.open(autoConnect:false);await phone.open(autoConnect:false);await owner.createWorkspace(url,'Owner desktop');
   final request=await phone.identity.requestCode('Yard phone',desktop:false);await phone.acceptGrant(await owner.identity.grant(request,role:'capture'));
   await owner.connect();await phone.connect();await eventually(() async=>owner.peerCount==1&&phone.peerCount==1);
-  final bytes=List<int>.generate(150000,(i)=>i%251);await a.photo('yard-car.jpg').writeAsBytes(bytes);await a.save(vehicle(photos:['yard-car.jpg']));
+  final bytes=List<int>.generate(1500000,(i)=>i%251);await a.photo('yard-car.jpg').writeAsBytes(bytes);await a.save(vehicle(photos:['yard-car.jpg']));
+  await eventually(() async {
+   final files=await Directory('${b.root.path}/sync-stage').list().toList();
+   return files.whereType<File>().isNotEmpty;
+  });
+  await phone.disconnect();
+  expect(await b.all(),isEmpty);
+  final parts=await Directory('${b.root.path}/sync-stage').list().toList();expect(parts.whereType<File>(),isNotEmpty);
+  await phone.connect();
   await eventually(() async=>(await b.all()).length==1);
   expect(await b.photo('yard-car.jpg').readAsBytes(),bytes);expect((await b.all()).single['gps']['lat'],33.1);
   expect(relay.frames.any((frame)=>utf8.decode(frame).contains('Honda')),isFalse);

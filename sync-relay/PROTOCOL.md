@@ -1,14 +1,27 @@
-# Required app protocol — design contract, not implemented sync
+# Native client protocol — candidate 0.4
 
-The relay is deliberately an opaque transport. The following requirements must be implemented and tested in the apps before any real inventory is transmitted.
+The relay is untrusted and opaque. It forwards bounded binary frames to simultaneously connected peers and has no replay/history store. Inventory and retry queues live on devices. Browser inventory is separate.
 
-1. Each device generates its own signing identity and keeps its private key in the platform keystore. A workspace has a pinned owner public key. QR enrollment must authenticate that fingerprint out of band; a relay-room string is not identity.
-2. The owner explicitly approves a signed device certificate with a role. Team capture devices can propose additions/metadata edits and photo additions. Receiver-side authorization rejects capture-device deletion, photo removal, certificate issuance and permission changes. An untrusted device's self-reported OS is not an authorization decision. Solo mobile owners retain owner rights in their own solo workspace.
-3. Establish authenticated ephemeral session keys using maintained cryptographic implementations. Bind handshakes to both device identities, workspace ID, certificate, fresh challenges and transcript. Use distinct direction keys and unique authenticated-encryption nonces; reject sequence replays. Do not use a workspace room ID as an encryption key.
-4. Team desktops validate signed proposals and commit authoritative inventory changes. Persist outgoing operations on the sender until a durable signed acknowledgement is received. Lost relay connections must never remove unacknowledged work.
-5. Transfer photos in bounded chunks, address them by cryptographic content hash and verify the complete result before committing a record reference. Resume from confirmed chunks after reconnect. Never expose absolute local paths in a sync payload.
-6. Deletion produces an owner-authorized tombstone and revision. An old disconnected phone must not resurrect deleted data by uploading a stale snapshot. Conflicting edits stay locally recoverable and are presented for resolution.
-7. Revocation is signed and versioned by the owner. Test lost-phone revocation, stale membership replay, clock skew, duplicate delivery, tampered ciphertext and a hostile relay. Offline devices may retain data they already possessed; revocation cannot erase arbitrary copies.
-8. Internet acceptance requires simultaneously connected real devices behind different networks, interrupted photo upload and receiver-side permission tests. LAN success alone is insufficient.
+## Pairing and identity
 
-Current status: transport tests exist; app enrollment and sync integration are not enabled. This file is not evidence of completed security validation.
+Each device creates an Ed25519 seed held in platform secure storage. A workspace pins its owner's public key, a random 256-bit discovery secret and a membership epoch. A self-signed request identifies a device. The owner returns a signed certificate for that public key and a private approval code containing workspace access. Users transfer codes directly through a trusted channel and verify the device name/request. No QR or hardware attestation is claimed. Self-reported desktop type is checked for convenience; only explicit owner approval grants a manager role.
+
+Solo phone owners retain management rights. Capture certificates cannot issue approvals, delete/restore vehicles, remove saved photo references or clear saved GPS pins. Peers independently verify certificates and operation signatures. A local device administrator can alter local files; these roles cannot protect a device from its own administrator.
+
+Reset pairing rotates the group secret and epoch and reissues only the owner's certificate. Old certificates cannot join the owner's new epoch. Old devices retain their previous copies and may continue sharing in their old isolated workspace. Per-device revocation, key recovery and ownership transfer are not implemented.
+
+## Transport
+
+The join room is SHA-256 of the random discovery secret, workspace ID and epoch. Discovery frames use AES-256-GCM with that secret. Signed hellos contain device identity, fresh per-connection X25519 public key, 128-bit random session challenge and timestamp (five-minute clock tolerance). HKDF-SHA256 binds both identities, ephemeral public keys, challenges, workspace and epoch and derives separate direction keys. Session data uses AES-256-GCM with authenticated headers and fresh random 96-bit nonces. Strict per-direction sequence counters reject replay/gaps. Signed operation proofs survive forwarding; an intermediary cannot change the originating role or record.
+
+Frame headers expose workspace/device identifiers, sequences, traffic timing and sizes to the relay; record fields, GPS and photo data remain encrypted. Only wss endpoints are accepted except loopback ws for testing. A malicious relay can still drop, delay or deny service.
+
+## Inventory and photos
+
+Local SQLite mutations atomically append operations with base/new revisions and deletion tombstones. Sender journals retain work across restart, and authenticated peer acknowledgements persist delivery receipts. Receipts are session-authenticated, not separately signed portable proofs. Operations replay idempotently by ID. Existing records require matching base revisions; simultaneous edits are kept as owner-review conflicts. Owner resolution emits a signed higher revision; old updates cannot resurrect a tombstone. Rejected operations remain in the local journal; they are marked delivered/rejected and do not block later operations.
+
+Each operation signs a photo manifest of safe filenames, SHA-256 hashes and lengths. Receivers request 32 KiB chunks and append only at the expected offset. Content-hash staging files survive reconnect; full lengths/hashes are checked before renaming into photo storage and applying the record. A filename collision preserves existing bytes and rejects the incoming operation. Photos are capped at 25 MiB each and twelve per record. History, retained photos and abandoned staging files are not automatically pruned.
+
+## Validation boundary
+
+Automated tests exercise signed enrollment, tampering, epoch reset, role permissions, tombstones, conflict preservation, two-device loopback encrypted transfer, chunked photos and reconnect. Relay tests cover transport limits. These do not constitute a security audit or real-device internet acceptance. Before release, validate hostile-relay/replay behavior, clock skew, owner recovery, interrupted large transfers, revocation and actual devices on different networks. No public relay or Firebase billing is provisioned.

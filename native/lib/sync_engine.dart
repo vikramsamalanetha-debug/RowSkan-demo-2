@@ -9,7 +9,7 @@ import 'store.dart';
 import 'sync_identity.dart';
 import 'sync_transport.dart';
 
-Future<String> fileHash(File file) async =>(await Sha256().hashStream(file.openRead())).bytes.map((n)=>n.toRadixString(16).padLeft(2,'0')).join();
+Future<String> fileHash(File file) async =>(await Sha256().hash(await file.readAsBytes())).bytes.map((n)=>n.toRadixString(16).padLeft(2,'0')).join();
 class PendingSync {
  final SyncPeer peer;final Member author;final String packet;final Map<String,dynamic> operation,files;
  final complete=<String>{};final retries=<String,int>{};

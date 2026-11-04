@@ -15,6 +15,7 @@ The browser app starts empty for new installations. Existing local inventory is 
 
 Use the published GitHub Pages site for the browser edition. To test native builds, open **Actions → RowSkan release checks → a successful run → Artifacts**. Android packages are debug APKs; desktop packages are preview builds. Real-device validation and distribution signing are still required.
 
-This is an early-access candidate, not a completed commercial release. Internet device sync, signed administrator/device enrollment, cloud subscriptions and store distribution are not enabled. GitHub Pages is a demonstration host; a dedicated application domain is required before commercial use with sensitive inventory. Native and browser backup formats are separate.
+This is an early-access candidate, not a completed commercial release. Native apps now include owner-approved pairing and encrypted relay sync, with verified chunked photos, durable queues, deletion tombstones and conflict review. A reachable relay must still be configured; internet acceptance on real devices remains outstanding. Cloud subscriptions and store distribution are not enabled. GitHub Pages is a demonstration host; a dedicated application domain is required before commercial use with sensitive inventory. Native and browser backup formats are separate.
 
 See [RELEASE.md](RELEASE.md) for implemented protections, limitations and remaining release gates. The original separate RowSkan repository is not modified by this work.
+
