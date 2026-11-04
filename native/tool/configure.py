@@ -24,6 +24,7 @@ for rel in ['macos/Runner/DebugProfile.entitlements','macos/Runner/Release.entit
     with p.open('rb') as f:d=plistlib.load(f)
     d['com.apple.security.personal-information.location']=True
     d['com.apple.security.network.client']=True
+    d['keychain-access-groups']=['$(AppIdentifierPrefix)com.litamerica.rowskan']
     d['com.apple.security.files.user-selected.read-write']=True
     with p.open('wb') as f:plistlib.dump(d,f)
 # Plugin minimum deployment targets. Xcode may require updating its target too.
@@ -58,3 +59,4 @@ if p.exists():
 """
     if 'BYPASS_PERMISSION_LOCATION_ALWAYS=1' not in s and marker in s:
         p.write_text(s.replace(marker,marker+patch))
+

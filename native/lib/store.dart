@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'geo_math.dart';
 import 'package:archive/archive.dart';
@@ -34,7 +35,7 @@ class Store {
     if (_ffi) sqfliteFfiInit();
     final factory = _ffi ? databaseFactoryFfi : databaseFactory;
     db = await factory.openDatabase(p.join(root.path,'inventory.sqlite'), options:OpenDatabaseOptions(
-      version:2,
+      version:3,
       onConfigure:(db) async {
         await db.execute('PRAGMA foreign_keys=ON');
         await db.execute('PRAGMA busy_timeout=5000');
@@ -45,14 +46,17 @@ class Store {
         await db.execute('CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
         await db.execute('CREATE TABLE events(id TEXT PRIMARY KEY, vehicle_id TEXT NOT NULL, kind TEXT NOT NULL, created INTEGER NOT NULL)');
         await db.execute('CREATE TABLE drafts(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)');
+        await createSyncTables(db);
       },
       onUpgrade:(db,oldVersion,newVersion) async {
         if(oldVersion<2){
           await db.execute('ALTER TABLE vehicles ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
           await db.execute('CREATE TABLE drafts(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)');
         }
+        if(oldVersion<3)await createSyncTables(db);
       },
     ));
+    final assigned=await setting('sync-role','');syncRole=assigned.isEmpty?null:assigned;
   }
 
   Future<String> setting(String key, String fallback) async {
@@ -62,6 +66,7 @@ class Store {
   Future<void> setSetting(String key,String value) async {
     if(!['mode','industry','workspace'].contains(key)) throw StateError('Unknown setting.');
     if(key=='mode'){
+      if(syncRole=='capture'&&value!='team')throw StateError('A capture device cannot change its assigned role.');
       if(!['solo','team'].contains(value)) throw StateError('Invalid operating mode.');
       if(await setting('mode','solo')=='team'&&!desktop) throw StateError('A team phone cannot change its role.');
     }
@@ -130,7 +135,7 @@ class Store {
         if(v['_revision']!=old['revision'])throw RecordConflict('This vehicle changed while you were editing. Reopen it to avoid overwriting newer work.');
         revision=(old['revision'] as int)+1;
         final settings=await t.query('settings',where:'key=?',whereArgs:['mode']);
-        if(settings.isNotEmpty&&settings.first['value']=='team'&&!desktop){
+        if(syncRole=='capture'||settings.isNotEmpty&&settings.first['value']=='team'&&!desktop){
           final previous=jsonDecode(old['data'] as String) as Map;
           if(previous['gps']!=null&&v['gps']==null)throw StateError('Saved team GPS locations can only be removed on desktop.');
           final original=(previous['photos'] as List).cast<String>();
@@ -140,28 +145,31 @@ class Store {
       final encoded=Map<String,dynamic>.from(v)..remove('_revision');
       final record={'id':v['id'],'vin':v['vin'],'data':jsonEncode(encoded),'updated':DateTime.now().millisecondsSinceEpoch,'deleted':0,'revision':revision};
       if(rows.isEmpty){await t.insert('vehicles',record);}else{await t.update('vehicles',record,where:'id=?',whereArgs:[v['id']]);}
+      await journal(t,encoded,rows.isEmpty?0:revision-1,revision,'upsert');
       await _event(t,v['id'] as String,rows.isEmpty?'created':'updated');
       if(draftId!=null)await t.delete('drafts',where:'id=?',whereArgs:[draftId]);
-    });
+    });_syncChanges.add(null);
   }
   Future<void> remove(String id) async {
-    if(!canDelete(await setting('mode','solo'),desktop:desktop))throw StateError('Team records can only be deleted on desktop.');
+    if(syncRole=='capture'||!canDelete(await setting('mode','solo'),desktop:desktop))throw StateError('Team records can only be deleted on desktop.');
     await db.transaction((t) async {
       final rows=await t.query('vehicles',where:'id=? AND deleted=0',whereArgs:[id]);
       if(rows.isEmpty)throw StateError('Vehicle not found.');
       await t.update('vehicles',{'deleted':1,'revision':(rows.first['revision'] as int)+1,'updated':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[id]);
+      await journal(t,Map<String,dynamic>.from(jsonDecode(rows.first['data'] as String) as Map),rows.first['revision'] as int,(rows.first['revision'] as int)+1,'delete',deleted:true);
       await _event(t,id,'deleted');
-    });
+    });_syncChanges.add(null);
   }
   Future<void> restoreLast() async {
-    if(!canDelete(await setting('mode','solo'),desktop:desktop))throw StateError('Restore is desktop-only in team mode.');
+    if(syncRole=='capture'||!canDelete(await setting('mode','solo'),desktop:desktop))throw StateError('Restore is desktop-only in team mode.');
     await db.transaction((t) async {
       final rows=await t.query('vehicles',where:'deleted=1',orderBy:'updated DESC',limit:1);
       if(rows.isEmpty)throw StateError('No deleted vehicles to restore.');
       final r=rows.first;
       await t.update('vehicles',{'deleted':0,'revision':(r['revision'] as int)+1,'updated':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[r['id']]);
+      await journal(t,Map<String,dynamic>.from(jsonDecode(r['data'] as String) as Map),r['revision'] as int,(r['revision'] as int)+1,'restore');
       await _event(t,r['id'] as String,'restored');
-    });
+    });_syncChanges.add(null);
   }
 
   Future<void> saveDraft(String id,Map<String,dynamic> data) async {
@@ -246,12 +254,100 @@ class Store {
           final v=Map<String,dynamic>.from(input)..remove('_revision');
           v['photos']=(v['photos'] as List<String>).map((n)=>names[n]!).toList();
           await t.insert('vehicles',{'id':v['id'],'vin':v['vin'],'data':jsonEncode(v),'updated':DateTime.now().millisecondsSinceEpoch,'deleted':0,'revision':1});
+          await journal(t,v,0,1,'upsert');
           await _event(t,v['id'] as String,'imported');
         }
       });
-      return additions.length;
+      _syncChanges.add(null);return additions.length;
     }catch(_){for(final name in staged){try{if(await photo(name).exists())await photo(name).delete();}catch(_){}}rethrow;}
   }
+  final _syncChanges=StreamController<void>.broadcast();
+  Stream<void> get syncChanges=>_syncChanges.stream;
+  String? syncRole;
+  Future<void> setSyncRole(String role) async {if(!['owner','manager','capture'].contains(role))throw StateError('Invalid role.');syncRole=role;await db.insert('settings',{'key':'sync-role','value':role},conflictAlgorithm:ConflictAlgorithm.replace);}
+  Future<void> journal(DatabaseExecutor t,Map<String,dynamic> record,int base,int revision,String kind,{bool deleted=false}) async {
+    final clean=Map<String,dynamic>.from(record)..remove('_revision');
+    final operation={'id':const Uuid().v4(),'recordId':clean['id'],'kind':kind,'baseRevision':base,'revision':revision,'record':clean,'deleted':deleted,'created':DateTime.now().millisecondsSinceEpoch};
+    await t.insert('sync_operations',{'id':operation['id'],'operation':jsonEncode(operation),'packet':null,'source':'local'});
+  }
+  Future<void> resetSyncJournal() async {
+    await db.transaction((t) async {
+      await t.delete('sync_receipts');await t.delete('sync_operations');
+      for(final r in await t.query('vehicles',orderBy:'updated ASC')){
+        await journal(t,Map<String,dynamic>.from(jsonDecode(r['data'] as String) as Map),0,r['revision'] as int,r['deleted']==1?'delete':'upsert',deleted:r['deleted']==1);
+      }
+    });
+    _syncChanges.add(null);
+  }
+  Future<List<Map<String,dynamic>>> syncPending(String peer) async =>(await db.rawQuery('SELECT o.* FROM sync_operations o LEFT JOIN sync_receipts r ON r.operation_id=o.id AND r.peer=? WHERE r.operation_id IS NULL ORDER BY o.seq LIMIT 1',[peer])).map((r)=>Map<String,dynamic>.from(r)).toList();
+  Future<Map<String,dynamic>?> syncOperation(String id) async {
+    final rows=await db.query('sync_operations',where:'id=?',whereArgs:[id]);return rows.isEmpty?null:Map<String,dynamic>.from(rows.single);
+  }
+  Future<void> cacheSyncPacket(String id,String operation,String packet) async {await db.update('sync_operations',{'operation':operation,'packet':packet},where:'id=?',whereArgs:[id]);}
+  Future<void> syncReceipt(String id,String peer,String status) async {await db.insert('sync_receipts',{'operation_id':id,'peer':peer,'status':status},conflictAlgorithm:ConflictAlgorithm.replace);}
+  Future<List<Map<String,dynamic>>> syncConflicts() async =>(await db.query('sync_conflicts',where:'resolved=0',orderBy:'created DESC')).map((r)=>Map<String,dynamic>.from(r)).toList();
+  Future<void> dismissSyncConflict(String id) async {await db.update('sync_conflicts',{'resolved':1},where:'id=?',whereArgs:[id]);}
+  Future<void> resolveSyncConflict(String id,{bool useIncoming=true}) async {
+    if(syncRole!='owner')throw StateError('Only the workspace owner can resolve a shared conflict.');
+    await db.transaction((t) async {
+      final conflicts=await t.query('sync_conflicts',where:'id=? AND resolved=0',whereArgs:[id]);if(conflicts.isEmpty)throw StateError('Conflict no longer exists.');
+      final op=Map<String,dynamic>.from(jsonDecode(conflicts.first['operation'] as String) as Map);var record=validate(Map<String,dynamic>.from(op['record'] as Map))..remove('_revision');
+      final rows=await t.query('vehicles',where:'id=?',whereArgs:[record['id']]);final previous=rows.isEmpty?0:rows.first['revision'] as int;
+      if(!useIncoming){if(rows.isEmpty)throw StateError('No local version exists.');record=validate(Map<String,dynamic>.from(jsonDecode(rows.first['data'] as String) as Map))..remove('_revision');op['deleted']=rows.first['deleted']==1;}
+      final revision=(previous>(op['revision'] as int)?previous:op['revision'] as int)+1;
+      final row={'id':record['id'],'vin':record['vin'],'data':jsonEncode(record),'updated':DateTime.now().millisecondsSinceEpoch,'revision':revision,'deleted':op['deleted']==true?1:0};
+      if(rows.isEmpty){await t.insert('vehicles',row);}else{await t.update('vehicles',row,where:'id=?',whereArgs:[record['id']]);}
+      await journal(t,record,previous,revision,'resolve',deleted:op['deleted']==true);
+      await t.update('sync_conflicts',{'resolved':1},where:'id=?',whereArgs:[id]);await _event(t,record['id'] as String,'sync_conflict_resolved');
+    });_syncChanges.add(null);
+  }
+
+  /// Called only after the sender certificate, operation signature and complete
+  /// photo content hashes have been verified by the sync engine.
+  Future<String> applySyncOperation(Map<String,dynamic> op,String packet,{required String role,required bool owner}) async {
+    final record=validate(Map<String,dynamic>.from(op['record'] as Map))..remove('_revision');
+    final id=op['id'],base=op['baseRevision'],revision=op['revision'],kind=op['kind'];
+    if(id is! String||!RegExp(r'^[a-zA-Z0-9_-]{1,80}$').hasMatch(id)||op['recordId']!=record['id']||base is! int||revision is! int||base<0||revision<=base||revision>2147483647||op['deleted'] is! bool||!['upsert','delete','restore','resolve'].contains(kind))throw StateError('Invalid synchronization operation.');
+    if(!['owner','manager','capture'].contains(role))throw StateError('Invalid device role.');
+    if((kind=='delete'||kind=='restore'||op['deleted']==true)&&role=='capture')throw StateError('Capture devices cannot delete or restore shared vehicles.');
+    if(kind=='resolve'&&!owner)throw StateError('Only the owner can resolve shared conflicts.');
+    if(kind=='upsert'&&op['deleted']==true||kind=='delete'&&op['deleted']!=true||kind=='restore'&&op['deleted']==true)throw StateError('Invalid deletion operation.');
+    if(op['deleted']!=true){for(final photoName in record['photos'] as List<String>){if(!await photo(photoName).exists())throw StateError('Sync photo is incomplete.');}}
+    final status=await db.transaction<String>((t) async {
+      if((await t.query('sync_operations',columns:['id'],where:'id=?',whereArgs:[id])).isNotEmpty)return 'duplicate';
+      final rows=await t.query('vehicles',where:'id=?',whereArgs:[record['id']]);
+      Future<String> conflict(String reason) async {
+        await t.insert('sync_conflicts',{'id':id,'operation':jsonEncode(op),'reason':reason,'created':DateTime.now().millisecondsSinceEpoch,'resolved':0},conflictAlgorithm:ConflictAlgorithm.ignore);return 'conflict';
+      }
+      final duplicateVin=await t.query('vehicles',columns:['id'],where:'vin=? AND id<>? AND deleted=0',whereArgs:[record['vin'],record['id']]);
+      if((record['vin'] as String).isNotEmpty&&op['deleted']!=true&&duplicateVin.isNotEmpty)return conflict('This VIN already exists under another record.');
+      if(rows.isNotEmpty){
+        final old=rows.first,previous=validate(Map<String,dynamic>.from(jsonDecode(rows.first['data'] as String) as Map))..remove('_revision');
+        final same=old['revision']==revision&&old['deleted']==(op['deleted']==true?1:0)&&jsonEncode(previous)==jsonEncode(record);
+        if(!same){
+          if(role=='capture'){
+            if(old['deleted']==1)throw StateError('A capture device cannot resurrect a deleted vehicle.');
+            if(!(previous['photos'] as List<String>).every((record['photos'] as List<String>).contains)||previous['gps']!=null&&record['gps']==null)throw StateError('Capture devices cannot remove saved photos or GPS pins.');
+          }
+          if(kind=='resolve'&&owner){if(revision<=(old['revision'] as int))return conflict('A newer change already exists.');}
+          else if(old['revision']!=base)return conflict('Both devices edited this vehicle. Owner review is required.');
+          if(old['deleted']==1&&kind!='restore'&&kind!='resolve')return conflict('A deleted record needs an authorized restore.');
+          await t.update('vehicles',{'vin':record['vin'],'data':jsonEncode(record),'revision':revision,'deleted':op['deleted']==true?1:0,'updated':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[record['id']]);
+        }
+      }else{
+        await t.insert('vehicles',{'id':record['id'],'vin':record['vin'],'data':jsonEncode(record),'revision':revision,'deleted':op['deleted']==true?1:0,'updated':DateTime.now().millisecondsSinceEpoch});
+      }
+      await t.insert('sync_operations',{'id':id,'operation':jsonEncode(op),'packet':packet,'source':'remote'});
+      await _event(t,record['id'] as String,'synced_$kind');return 'applied';
+    });_syncChanges.add(null);return status;
+  }
+
+}
+
+Future<void> createSyncTables(DatabaseExecutor db) async {
+ await db.execute('CREATE TABLE sync_operations(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,operation TEXT NOT NULL,packet TEXT,source TEXT NOT NULL)');
+ await db.execute('CREATE TABLE sync_receipts(operation_id TEXT NOT NULL,peer TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(operation_id,peer))');
+ await db.execute('CREATE TABLE sync_conflicts(id TEXT PRIMARY KEY,operation TEXT NOT NULL,reason TEXT NOT NULL,created INTEGER NOT NULL,resolved INTEGER NOT NULL DEFAULT 0)');
 }
 
 /// Bound ZIP expansion BEFORE decompressing. Reject multi-volume and ZIP64 files,
@@ -280,4 +376,5 @@ void inspectZipDirectory(List<int> bytes){
   }
   if(at!=end||!names.contains('inventory.json'))throw StateError('Invalid backup directory.');
 }
+
 
